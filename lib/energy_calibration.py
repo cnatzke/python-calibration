@@ -1,9 +1,11 @@
 import numpy as np
 import scipy.signal
 from configobj import ConfigObj
+from lib.input_handler import input_handler
+from lib.histogram_manager import histogram_manager
 from lmfit import Model, Parameters
 from scipy.special import erf
-import pandas as pd
+
 from pprint import pprint
 
 
@@ -11,10 +13,10 @@ class energy_calibration:
 
     def __init__(self, cal_file=None, max_energy=3000):
         self.cal_file = cal_file
-        self.num_channels = 64
         self.cal_dict = {}
         self.max_energy = max_energy
         self.linear_cal_list = []
+        self.quadratic_cal_list = []
         self.source_info = {}
         self.source_peak_finder_dict = {}
 
@@ -26,25 +28,65 @@ class energy_calibration:
             self.cal_dict[int(config[channel]['channel'])] = np.array(config[channel]['cal_coeff'], dtype=float)
         return
 
-    def calibrate(self, histograms, fit_type, source_name):
+    def calibrate(self, source_dict):
+        # we use a two step calibration process:
+        # 1 - Perform an initial linear calibration using 60Co
+        # 2 - Perform quadratic calibration using variety of sources
+
+        my_input = input_handler()
+
+        # first perform linear calibration using 60Co
+        data_df = my_input.read_in_data(source_dict['60co'])
+        hist_man = histogram_manager(data_df)
+        charge_hist_dict = hist_man.generate_channel_histograms_1D('charge')
+        self.perform_linear_calibration(charge_hist_dict, '60co')
+        # second perform quadratic calibration using other sources
+        for source_key in source_dict.keys():
+            if source_key == '60co':
+                continue
+            else:
+                print(f"Extracting {source_key} peak positions ...")
+                data_df = my_input.read_in_data(source_dict[source_key])
+                hist_man = histogram_manager(data_df)
+                charge_hist_dict = hist_man.generate_channel_histograms_1D('charge')
+                self.get_quadratic_calibration_values(charge_hist_dict, source_key)
+        return
+
+    def perform_linear_calibration(self, histograms, source_name):
         # Creates initial 60Co linear calibration to make quadratic peak search easier
         index = 0
         print("Perfoming linear calibration ...")
         for channel_dict_key in histograms.keys():
             if sum(histograms[channel_dict_key]) > 10000:
-                if fit_type == 'linear':
-                    self.linear_cal_list.append({'channel': channel_dict_key, 'hist': histograms[channel_dict_key]})
+                self.linear_cal_list.append({'channel': channel_dict_key, 'hist': histograms[channel_dict_key]})
 
-                    # find the peaks of interest
-                    self.find_peaks(index, self.linear_cal_list, source_name)
-                    self.find_peak_centroids(index, self.linear_cal_list)
-                    # now we fit a linear function for basic linear calibration
-                    self.find_poly_fit(index, self.linear_cal_list, 1)
+                # find the peaks of interest
+                self.find_peaks(index, self.linear_cal_list, source_name)
+                self.find_peak_centroids(index, self.linear_cal_list)
+                # now we fit a linear function for basic linear calibration
+                self.find_poly_fit(index, self.linear_cal_list, 1)
                 index = index + 1
             else:
-                print(f"Channel {channel_dict_key} rejected due to too few counts.")
+                print(f"  Channel {channel_dict_key} rejected due to insufficient counts.")
         # write out calibration file
-        self.write_calibration_file('my_cal.cal')
+        self.write_calibration_file('linear_calibration.cal')
+        return
+
+    def get_quadratic_calibration_values(self, histogram_dict, source_name):
+        # finds centroid values of various sources
+        index = 0
+        for channel_dict_key in histogram_dict.keys():
+            if sum(histogram_dict[channel_dict_key]) > 10000:
+                self.quadratic_cal_list.append({'channel': channel_dict_key, 'hist': histogram_dict[channel_dict_key]})
+
+                # find the peaks of interest
+                self.get_peak_guess(index, self.quadratic_cal_list, source_name)
+                self.find_peak_centroids(index, self.quadratic_cal_list)
+                index = index + 1
+            else:
+                print(f"  Channel {channel_dict_key} rejected due to insufficient counts.")
+
+        pprint(self.quadratic_cal_list)
         return
 
     def find_poly_fit(self, index, hist_list, degree, overwrite=True):
@@ -65,28 +107,23 @@ class energy_calibration:
         histogram_dict = histogram_list[index]
         self.get_peak_info(source_name)
         tallest_peak = np.amax(histogram_dict['hist'])
-        # we only care about the peaks to the right (higher energy) of the tallest
-        tallest_peak_index = np.where(
-            histogram_dict['hist'] == tallest_peak)[0][0]
-        prominence = tallest_peak * \
-            self.source_peak_finder_dict['prominence_fraction_of_tallest_peak']
-        peak_indices, peak_properties = scipy.signal.find_peaks(
-            histogram_dict['hist'], prominence=prominence)
+        tallest_peak_index = np.where(histogram_dict['hist'] == tallest_peak)[0][0]
+        prominence = tallest_peak * self.source_peak_finder_dict['prominence_fraction_of_tallest_peak']
+        peak_indices, peak_properties = scipy.signal.find_peaks(histogram_dict['hist'], prominence=prominence)
 
         # checking to make sure our found peaks make sense
         if len(peak_indices) < self.source_peak_finder_dict['num_peaks_needed']:
             print(f"Could not find {self.source_peak_finder_dict['num_peaks_needed']}, found {len(peak_indices)}")
             exit(1)
         try:
-            tallest_peak_index_in_found_peaks = np.where(
-                peak_indices == tallest_peak_index)[0][0]
+            tallest_peak_index_in_found_peaks = np.where(peak_indices == tallest_peak_index)[0][0]
         except IndexError:
             print(f'Tallest peak index: {tallest_peak_index}')
             print('Could not match tallest peak to a found peak ... something has gone horribly wrong')
             exit(1)
 
         peak_info = []
-        for my_peak_index in range(tallest_peak_index_in_found_peaks, len(peak_indices)):
+        for my_peak_index in range(0, len(peak_indices)):
             # print("My peak index", my_peak_index)
             peak_info.append({'peak_energy': self.source_info['peak'][my_peak_index],
                               'est_peak_centroid': peak_indices[my_peak_index],
@@ -95,6 +132,22 @@ class energy_calibration:
                               'full_fit_results': None})
         histogram_list[index].update({'peak_info': peak_info})
         # print(histogram_list)
+        return
+
+    def get_peak_guess(self, index, histogram_list, source_name):
+        # get linear calibration parameters and peak information
+        cal_params = self.linear_cal_list[index]['poly_fit']
+        self.get_peak_info(source_name)
+
+        peak_info = []
+        for peak in self.source_info['peak']:
+            bin_guess = round((peak - cal_params[1]) / cal_params[0])
+            peak_info.append({'peak_energy': peak,
+                              'est_peak_centroid': bin_guess,
+                              'fit_peak_centroid': None,
+                              'fit_peak_fwhm': None,
+                              'full_fit_results': None})
+        histogram_list[index].update({'peak_info': peak_info})
         return
 
     def find_peak_centroids(self, index, histogram_list):
@@ -135,10 +188,10 @@ class energy_calibration:
             self.source_info['peak'] = [1173.228, 1332.492]
             self.source_info['peak_error'] = [0.003, 0.004]
             self.source_peak_finder_dict = {'prominence_fraction_of_tallest_peak': 1 / 3,
+                                            'distance': 5,
                                             'num_peaks_needed': 2}
         elif source_name.lower() == "152eu":
-            self.eu152_energy_vals = [
-                121.7817, 244.6974, 344.2785, 778.9045, 964.057, 1112.076, 1408.013]
+            self.source_info['peak'] = [121.7817, 244.6974, 344.2785, 778.9045, 964.057, 1112.076, 1408.013]
         return
 
     def peak_function(self, x, scale, centroid, sigma, linear_bg, scale_bg):
@@ -149,6 +202,7 @@ class energy_calibration:
         config.filename = cal_output_file
         self.extend_cal_object(self.linear_cal_list, config)
         config.write()
+        print(f'Writing calibration coefficients to: {cal_output_file}')
         return
 
     def extend_cal_object(self, hist_list, config):
@@ -161,11 +215,11 @@ class energy_calibration:
     def apply_calibration(self, data_df):
         self.read_in_calibration_file()
         # apply channel dependent energy calibration to entire dataframe
-        data_df['calibrated_energy'] = 0.0
+        data_df['energy'] = 0.0
         num_channels = 64
         for channel_key in self.cal_dict.keys():
             print(f'Calibrating channel: {channel_key} of {num_channels}', end='\r')
-            data_df.loc[data_df.crystal == channel_key, 'calibrated_energy'] = np.polyval(
+            data_df.loc[data_df.crystal == channel_key, 'energy'] = np.polyval(
                 self.cal_dict[channel_key], data_df.loc[data_df['crystal'] == channel_key, 'charge'])
 
         return

@@ -22,7 +22,7 @@ class histogram_manager:
         channel_max = self.data_df.crystal.max()
 
         # iterate over each crystal
-        print(f'Building {column} histograms ... ')
+        print(f'Building channel dependent {column} histograms ... ')
         for channel in np.arange(channel_min, channel_max + 1, 1):
             # extract crystal specific data
             channel_df = self.data_df[self.data_df['crystal'] == channel]
@@ -33,6 +33,6 @@ class histogram_manager:
                 channel_histogram = np.append(channel_histogram, [0])
                 channel_histograms_dict[channel] = channel_histogram
             else:
-                print(f'Channel {channel} is empty, skipping ...')
+                print(f'  Channel {channel} is empty, skipping ...')
                 continue
         return channel_histograms_dict

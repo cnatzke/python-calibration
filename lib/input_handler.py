@@ -4,11 +4,13 @@ import csv
 
 class input_handler:
 
-    def __init__(self, input_filename):
-        self.input_filename = input_filename
-        self.file_suffix = pathlib.Path(input_filename).suffix
+    def __init__(self):
+        self.input_filename = None
+        self.file_suffix = None
 
-    def read_in_data(self):
+    def read_in_data(self, input_filename):
+        self.input_filename = input_filename
+        self.file_suffix = pathlib.Path(self.input_filename).suffix
         if(self.file_suffix == '.csv'):
             print(f'Processing CSV file: {self.input_filename}')
             self.read_in_csv()

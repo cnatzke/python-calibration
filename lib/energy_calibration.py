@@ -16,7 +16,9 @@ class energy_calibration:
         self.cal_dict = {}
         self.max_energy = max_energy
         self.linear_cal_list = []
-        self.quadratic_cal_list = []
+        self.quad_cal_list = []
+        self.quad_cal_data = []
+        self.source_channel_list = []
         self.source_info = {}
         self.source_peak_finder_dict = {}
 
@@ -43,6 +45,7 @@ class energy_calibration:
         # second perform quadratic calibration using other sources
         for source_key in source_dict.keys():
             if source_key == '60co':
+                self.quad_cal_list.append({'source': source_key, 'cal_info': self.linear_cal_list})
                 continue
             else:
                 print(f"Extracting {source_key} peak positions ...")
@@ -50,6 +53,10 @@ class energy_calibration:
                 hist_man = histogram_manager(data_df)
                 charge_hist_dict = hist_man.generate_channel_histograms_1D('charge')
                 self.get_quadratic_calibration_values(charge_hist_dict, source_key)
+                self.quad_cal_list.append({'source': source_key, 'cal_info': self.source_channel_list})
+
+        # now we perform the quadratic calibration
+        self.perform_quadratic_calibration()
         return
 
     def perform_linear_calibration(self, histograms, source_name):
@@ -72,21 +79,34 @@ class energy_calibration:
         self.write_calibration_file('linear_calibration.cal')
         return
 
-    def get_quadratic_calibration_values(self, histogram_dict, source_name):
-        # finds centroid values of various sources
-        index = 0
-        for channel_dict_key in histogram_dict.keys():
-            if sum(histogram_dict[channel_dict_key]) > 10000:
-                self.quadratic_cal_list.append({'channel': channel_dict_key, 'hist': histogram_dict[channel_dict_key]})
+    def perform_quadratic_calibration(self):
+        # first we need to collect the peak data from all sources
+        print("Perfoming linear calibration ...")
+        self.combine_all_source_data()
+        for channel_index in range(0, len(self.quad_cal_data)):
+            poly_fit = np.polyfit(self.quad_cal_data[channel_index]['centroids'], self.quad_cal_data[channel_index]['energy'], 2)
+            self.quad_cal_data[channel_index].update({'poly_fit': poly_fit})
+        # write out calibration file
+        self.write_calibration_file('quadratic_calibration.cal')
+        return
 
-                # find the peaks of interest
-                self.get_peak_guess(index, self.quadratic_cal_list, source_name)
-                self.find_peak_centroids(index, self.quadratic_cal_list)
+    def combine_all_source_data(self):
+        # first aggregate the channel data from all sources used
+        self.quad_cal_data = [0] * 64
+        for my_source_index in range(len(self.quad_cal_list)):
+            my_source = self.quad_cal_list[my_source_index]['cal_info']
+            index = 0
+            for my_channel_index in range(len(my_source)):
+                my_peak_info = my_source[my_channel_index]['peak_info']
+                if self.quad_cal_data[index] == 0:
+                    self.quad_cal_data[index] = {'channel': my_source[my_channel_index]['channel'], 'energy': [], 'centroids': []}
+                # extract fitted peak centroids
+                for my_peak_index in range(len(my_peak_info)):
+                    self.quad_cal_data[index]['energy'].append(my_peak_info[my_peak_index]['peak_energy'])
+                    self.quad_cal_data[index]['centroids'].append(my_peak_info[my_peak_index]['fit_peak_centroid'])
                 index = index + 1
-            else:
-                print(f"  Channel {channel_dict_key} rejected due to insufficient counts.")
-
-        pprint(self.quadratic_cal_list)
+        # remove zero channels
+        self.quad_cal_data = list(filter(lambda entry: entry != 0, self.quad_cal_data))
         return
 
     def find_poly_fit(self, index, hist_list, degree, overwrite=True):
@@ -94,8 +114,7 @@ class energy_calibration:
         peak_centroids = []
         peak_energy = []
         for my_peak_index in range(len(peak_info)):
-            peak_centroids.append(
-                peak_info[my_peak_index]['fit_peak_centroid'])
+            peak_centroids.append(peak_info[my_peak_index]['fit_peak_centroid'])
             peak_energy.append(peak_info[my_peak_index]['peak_energy'])
 
         # least squares polynomial fit
@@ -132,6 +151,23 @@ class energy_calibration:
                               'full_fit_results': None})
         histogram_list[index].update({'peak_info': peak_info})
         # print(histogram_list)
+        return
+
+    def get_quadratic_calibration_values(self, histogram_dict, source_name):
+        # finds centroid values of various sources
+        index = 0
+        for channel_dict_key in histogram_dict.keys():
+            if sum(histogram_dict[channel_dict_key]) > 10000:
+                self.source_channel_list.append({'channel': channel_dict_key, 'hist': histogram_dict[channel_dict_key]})
+
+                # find the peaks of interest
+                self.get_peak_guess(index, self.source_channel_list, source_name)
+                self.find_peak_centroids(index, self.source_channel_list)
+                index = index + 1
+            else:
+                print(f"  Channel {channel_dict_key} rejected due to insufficient counts.")
+
+        # pprint(self.source_channel_list)
         return
 
     def get_peak_guess(self, index, histogram_list, source_name):
@@ -221,5 +257,4 @@ class energy_calibration:
             print(f'Calibrating channel: {channel_key} of {num_channels}', end='\r')
             data_df.loc[data_df.crystal == channel_key, 'energy'] = np.polyval(
                 self.cal_dict[channel_key], data_df.loc[data_df['crystal'] == channel_key, 'charge'])
-
         return

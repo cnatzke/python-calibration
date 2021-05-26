@@ -10,13 +10,6 @@ from pathlib import Path
 from lib.energy_calibration import energy_calibration
 
 
-from pprint import pprint
-import seaborn as sns
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-
-
 def parse_and_run(args):
 
     config = ConfigParser()
@@ -31,25 +24,6 @@ def parse_and_run(args):
     energy_cal = energy_calibration()
     energy_cal.calibrate(source_dict)
 
-    '''
-    energy_cal_1 = energy_calibration(cal_file='./my_cal.cal')
-    # need to fix calibration
-    energy_cal_1.apply_calibration(mydata_df)
-
-    # --- Plot testing -----------------------------------------
-    energy_bins = np.linspace(0, 3000, 3000, dtype=int)
-    channel_bins = np.linspace(0, 70, 70, dtype=int)
-    sns.set_style('ticks')
-    sns.set_context('notebook')
-    width, height = plt.figaspect(0.563)  # 16x9
-    fig, axes = plt.subplots(num=None, figsize=(width, height), dpi=96)
-
-    plt.hist2d(mydata_df.crystal, mydata_df.energy, bins=[channel_bins, energy_bins], cmap="viridis", norm=LogNorm())
-    plt.colorbar(use_gridspec=True)
-    plt.tight_layout()
-    plt.show()
-    '''
-
 
 def main():
     parser = argparse.ArgumentParser(description='GRIFFIN Energy Calibrator')
@@ -60,6 +34,7 @@ def main():
     args, unknown = parser.parse_known_args()
 
     parse_and_run(args)
+
 
 if __name__ == "__main__":
     main()

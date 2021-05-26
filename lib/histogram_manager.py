@@ -14,12 +14,10 @@ class histogram_manager:
     def generate_channel_histograms_1D(self, column):
         # read in dataframe with raw data (e.g. charge, time, channel, etc)
         # and create histograms for each channel
-        energy_bins = np.linspace(
-            0, self.energy_max, num=self.energy_max, dtype=int)
-        channel_histogram = None
-        channel_histograms_dict = {}
+        energy_bins = np.linspace(0, self.energy_max, num=self.energy_max, dtype=int)
         channel_min = self.data_df.crystal.min()
         channel_max = self.data_df.crystal.max()
+        channel_histogram_list = [0] * (channel_max + 1) # GRIFFIN channels indexed [1,64] instead of [0,63]
 
         # iterate over each crystal
         print(f'Building channel dependent {column} histograms ... ')
@@ -27,12 +25,21 @@ class histogram_manager:
             # extract crystal specific data
             channel_df = self.data_df[self.data_df['crystal'] == channel]
             if not channel_df.empty:
-                channel_histogram = np.histogram(
-                    channel_df[column], bins=energy_bins)[0]
+                # build histogram
+                channel_histogram, channel_histogram_bins = np.histogram(channel_df[column], bins=energy_bins)
+                # get std error in bins
+                channel_histogram_error = np.sqrt(channel_histogram)
                 # append 0 to end of histogram to get bins to match up
                 channel_histogram = np.append(channel_histogram, [0])
-                channel_histograms_dict[channel] = channel_histogram
+                channel_histogram_error = np.append(channel_histogram_error, [0])
+                channel_histogram_dict = {'channel': channel,
+                                          'counts': channel_histogram,
+                                          'bins': channel_histogram_bins,
+                                          'error': channel_histogram_error}
+                channel_histogram_list[channel] = channel_histogram_dict
             else:
                 print(f'  Channel {channel} is empty, skipping ...')
                 continue
-        return channel_histograms_dict
+        # removing zero entries
+        channel_histogram_list = list(filter(lambda entry: entry != 0, channel_histogram_list))
+        return channel_histogram_list
